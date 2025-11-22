@@ -10,7 +10,8 @@ import {
   query,
   where,
   getDocs,
-  arrayUnion
+  arrayUnion,
+  getDoc
 } from 'firebase/firestore';
 
 const STORAGE_KEY = 'trust_app_data';
@@ -19,13 +20,14 @@ const HEARTBEAT_INTERVAL = 60000; // 1 minute
 interface StoreData {
   users: User[];
   sessions: ChatSession[];
+  calls: Record<string, CallSignal>; // Added local call storage
 }
 
 type Listener = () => void;
 
 class HybridStore {
   private listeners: Set<Listener> = new Set();
-  private data: StoreData = { users: [], sessions: [] };
+  private data: StoreData = { users: [], sessions: [], calls: {} };
   private isFirebaseActive = false;
   private unsubscribes: (() => void)[] = [];
   private heartbeatInterval: any;
@@ -73,6 +75,7 @@ class HybridStore {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         this.data = JSON.parse(stored);
+        if (!this.data.calls) this.data.calls = {};
       }
     } catch (e) {
       console.error("Failed to load store data", e);
@@ -91,7 +94,10 @@ class HybridStore {
   }
 
   private notify() {
-    this.listeners.forEach(l => l());
+    // Use setTimeout to break synchronous call stacks and prevent recursion
+    setTimeout(() => {
+        this.listeners.forEach(l => l());
+    }, 0);
   }
 
   // --- User Methods ---
@@ -208,17 +214,35 @@ class HybridStore {
 
   // --- Call Signaling Methods ---
   subscribeToCall(sessionId: string, callback: (data: CallSignal) => void) {
-    if (!this.isFirebaseActive || !db) return () => {};
+    // Firebase Logic
+    if (this.isFirebaseActive && db) {
+      // onSnapshot fires immediately with current contents
+      return onSnapshot(doc(db, "calls", sessionId), (doc) => {
+        if (doc.exists()) {
+          callback(doc.data() as CallSignal);
+        }
+      });
+    }
     
-    return onSnapshot(doc(db, "calls", sessionId), (doc) => {
-      if (doc.exists()) {
-        callback(doc.data() as CallSignal);
-      }
-    });
+    // LocalStorage Logic
+    this.loadLocal();
+    // 1. IMPORTANT: Immediate callback if data exists so Answerer sees the Offer
+    if (this.data.calls && this.data.calls[sessionId]) {
+      callback(this.data.calls[sessionId]);
+    }
+
+    // 2. Subscribe to updates
+    const localListener = () => {
+       this.loadLocal();
+       if (this.data.calls && this.data.calls[sessionId]) {
+         callback(this.data.calls[sessionId]);
+       }
+    };
+
+    return this.subscribe(localListener);
   }
 
   async initCall(sessionId: string, offer: RTCSessionDescriptionInit) {
-    if (!this.isFirebaseActive || !db) return;
     const callData: CallSignal = {
       sessionId,
       offer,
@@ -227,33 +251,66 @@ class HybridStore {
       status: 'offering',
       createdAt: Date.now()
     };
-    await setDoc(doc(db, "calls", sessionId), callData);
+
+    if (this.isFirebaseActive && db) {
+      await setDoc(doc(db, "calls", sessionId), callData);
+    } else {
+      this.loadLocal();
+      this.data.calls[sessionId] = callData;
+      this.saveLocal();
+    }
   }
 
   async answerCall(sessionId: string, answer: RTCSessionDescriptionInit) {
-    if (!this.isFirebaseActive || !db) return;
-    await updateDoc(doc(db, "calls", sessionId), {
-      answer,
-      status: 'answered'
-    });
+    if (this.isFirebaseActive && db) {
+      await updateDoc(doc(db, "calls", sessionId), {
+        answer,
+        status: 'answered'
+      });
+    } else {
+      this.loadLocal();
+      if (this.data.calls[sessionId]) {
+        this.data.calls[sessionId].answer = answer;
+        this.data.calls[sessionId].status = 'answered';
+        this.saveLocal();
+      }
+    }
   }
 
   async addIceCandidate(sessionId: string, candidate: RTCIceCandidateInit, type: 'caller' | 'callee') {
-    if (!this.isFirebaseActive || !db) return;
-    if (type === 'caller') {
-      await updateDoc(doc(db, "calls", sessionId), {
-        callerCandidates: arrayUnion(candidate)
-      });
+    if (this.isFirebaseActive && db) {
+      if (type === 'caller') {
+        await updateDoc(doc(db, "calls", sessionId), {
+          callerCandidates: arrayUnion(candidate)
+        });
+      } else {
+        await updateDoc(doc(db, "calls", sessionId), {
+          calleeCandidates: arrayUnion(candidate)
+        });
+      }
     } else {
-      await updateDoc(doc(db, "calls", sessionId), {
-        calleeCandidates: arrayUnion(candidate)
-      });
+      this.loadLocal();
+      if (this.data.calls[sessionId]) {
+        if (type === 'caller') {
+          this.data.calls[sessionId].callerCandidates.push(candidate);
+        } else {
+          this.data.calls[sessionId].calleeCandidates.push(candidate);
+        }
+        this.saveLocal();
+      }
     }
   }
 
   async endCall(sessionId: string) {
-    if (!this.isFirebaseActive || !db) return;
-    await updateDoc(doc(db, "calls", sessionId), { status: 'ended' });
+    if (this.isFirebaseActive && db) {
+      await updateDoc(doc(db, "calls", sessionId), { status: 'ended' });
+    } else {
+      this.loadLocal();
+      if (this.data.calls[sessionId]) {
+        this.data.calls[sessionId].status = 'ended';
+        this.saveLocal();
+      }
+    }
   }
 }
 

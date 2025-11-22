@@ -3,10 +3,12 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    // This safely injects the Vercel environment variable into the client-side code
+    'process.env.API_KEY': JSON.stringify(process.env.API_KEY)
+  },
   build: {
     rollupOptions: {
-      // Mark these as external so Vite doesn't try to bundle them.
-      // This allows the browser to resolve them via the importmap in index.html
       external: [
         'react',
         'react-dom',

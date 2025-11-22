@@ -1,26 +1,12 @@
 
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import { getFirestore, Firestore } from "firebase/firestore";
+import { getAnalytics } from "firebase/analytics";
 
 const STORAGE_KEY = 'trust_firebase_config';
 
-export const getStoredConfig = () => {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch (e) {
-    return null;
-  }
-  return null;
-};
-
-export const saveConfig = (config: any) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-  window.location.reload();
-};
-
-// Configuration provided explicitly as default
-const defaultConfig = {
+// Config provided by user
+const firebaseConfig = {
   apiKey: "AIzaSyCxr36EvI2knSK8QEzvie-0wY5rVmco2fs",
   authDomain: "asdfgh-f76e8.firebaseapp.com",
   projectId: "asdfgh-f76e8",
@@ -30,26 +16,35 @@ const defaultConfig = {
   measurementId: "G-7C9083G7VH"
 };
 
-const configToUse = getStoredConfig() || defaultConfig;
-
 let app: FirebaseApp;
 let db: Firestore | null = null;
+let analytics;
 
 try {
-  // Only initialize if we have a valid config object with at least a projectId or apiKey
-  if (configToUse && (configToUse.apiKey || configToUse.projectId)) {
-    if (!getApps().length) {
-        app = initializeApp(configToUse);
-    } else {
-        app = getApp();
-    }
-    
-    db = getFirestore(app);
-    console.log("Firebase initialized successfully.");
+  if (!getApps().length) {
+      app = initializeApp(firebaseConfig);
+  } else {
+      app = getApp();
   }
+  
+  db = getFirestore(app);
+  
+  if (typeof window !== 'undefined') {
+      analytics = getAnalytics(app);
+  }
+  
+  console.log("✅ Firebase Backend Connected Successfully");
 } catch (error) {
-  console.error("Failed to initialize Firebase", error);
+  console.error("❌ Failed to initialize Firebase Backend", error);
   db = null;
 }
 
 export { db };
+
+export const getStoredConfig = () => firebaseConfig;
+
+export const saveConfig = (config: any) => {
+  // Keeps interface for DatabaseConfig component, but config is hardcoded
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  window.location.reload();
+};

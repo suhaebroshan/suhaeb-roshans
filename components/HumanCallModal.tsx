@@ -20,6 +20,7 @@ const HumanCallModal: React.FC<HumanCallModalProps> = ({ isOpen, onClose, sessio
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const processedCandidates = useRef<Set<string>>(new Set());
   const candidateQueue = useRef<RTCIceCandidateInit[]>([]);
+  const isProcessingOffer = useRef(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -74,6 +75,7 @@ const HumanCallModal: React.FC<HumanCallModalProps> = ({ isOpen, onClose, sessio
         } 
 
         // Subscribe to signaling updates
+        // The store.subscribeToCall callback triggers IMMEDIATELY with current state
         const unsubscribe = store.subscribeToCall(sessionId, async (data: CallSignal) => {
           if (!pcRef.current) return;
           const pc = pcRef.current;
@@ -83,25 +85,32 @@ const HumanCallModal: React.FC<HumanCallModalProps> = ({ isOpen, onClose, sessio
             return;
           }
 
-          // Handle Offer (if we are callee)
-          if (!isInitiator && data.offer && pc.signalingState === "stable") {
+          // Handle Offer (We are the Receiver/Callee)
+          // Added !isProcessingOffer.current to prevent potential race conditions
+          if (!isInitiator && data.offer && !data.answer && pc.signalingState === "stable" && !isProcessingOffer.current) {
              try {
+                isProcessingOffer.current = true;
+                console.log("Received Offer, creating answer...");
                 await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-                // Process queued candidates now that remote description is set
+                
                 await processCandidateQueue();
                 
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
+                
                 await store.answerCall(sessionId, { type: answer.type, sdp: answer.sdp });
+                
                 if (mounted) setStatus('connected');
              } catch (e) {
                  console.error("Error handling offer", e);
+                 isProcessingOffer.current = false; // Reset on error
              }
           }
 
-          // Handle Answer (if we are caller)
+          // Handle Answer (We are the Caller/Initiator)
           if (isInitiator && data.answer && pc.signalingState === "have-local-offer") {
              try {
+                console.log("Received Answer");
                 await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
                 await processCandidateQueue();
                 if (mounted) setStatus('connected');
@@ -112,22 +121,24 @@ const HumanCallModal: React.FC<HumanCallModalProps> = ({ isOpen, onClose, sessio
 
           // Handle Candidates
           const candidates = isInitiator ? data.calleeCandidates : data.callerCandidates;
-          for (const cand of candidates) {
-             const candStr = JSON.stringify(cand);
-             if (!processedCandidates.current.has(candStr)) {
-                processedCandidates.current.add(candStr);
-                
-                if (!pc.remoteDescription) {
-                    // Buffer candidates if remote description isn't ready
-                    candidateQueue.current.push(cand);
-                } else {
-                    try {
-                        await pc.addIceCandidate(new RTCIceCandidate(cand));
-                    } catch(e) {
-                        console.warn("ICE Candidate error", e);
+          
+          if (candidates) {
+              for (const cand of candidates) {
+                 const candStr = JSON.stringify(cand);
+                 if (!processedCandidates.current.has(candStr)) {
+                    processedCandidates.current.add(candStr);
+                    
+                    if (!pc.remoteDescription) {
+                        candidateQueue.current.push(cand);
+                    } else {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(cand));
+                        } catch(e) {
+                            console.warn("ICE Candidate error", e);
+                        }
                     }
-                }
-             }
+                 }
+              }
           }
         });
 
@@ -212,7 +223,7 @@ const HumanCallModal: React.FC<HumanCallModalProps> = ({ isOpen, onClose, sessio
 
           <h3 className="text-2xl font-bold text-white mb-2">
             {status === 'connecting' && 'Calling...'}
-            {status === 'ringing' && 'Connecting...'}
+            {status === 'ringing' && 'Incoming Call...'}
             {status === 'connected' && 'Connected'}
             {status === 'failed' && 'Connection Failed'}
             {status === 'ended' && 'Call Ended'}

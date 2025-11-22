@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useApp } from '../state/AppContext';
@@ -104,6 +105,7 @@ const ChatSessionPage: React.FC = () => {
   const [isAICallOpen, setIsAICallOpen] = useState(false);
   const [isHumanCallOpen, setIsHumanCallOpen] = useState(false);
   const [isIncomingCall, setIsIncomingCall] = useState(false);
+  const [isCallInitiator, setIsCallInitiator] = useState(false);
   
   // Add a local processing state to prevent double sends
   const [isProcessingAudio, setIsProcessingAudio] = useState(false);
@@ -141,11 +143,17 @@ const ChatSessionPage: React.FC = () => {
     const unsubscribe = store.subscribe(updateFromStore);
 
     const unsubscribeCalls = store.subscribeToCall(id, (data) => {
-       if (data.status === 'offering' && !isHumanCallOpen && !isIncomingCall) {
+       // If a call is offering and I am NOT in a call and I did NOT start it...
+       if (data.status === 'offering' && !isHumanCallOpen) {
+           // Only consider it incoming if we didn't just click the button ourselves
+           // But since we set isHumanCallOpen=true immediately on click, this check should be safe
            setIsIncomingCall(true);
-       } else if (data.status === 'ended') {
+       } 
+       
+       if (data.status === 'ended') {
            setIsIncomingCall(false);
-           if (isHumanCallOpen) setIsHumanCallOpen(false); 
+           setIsHumanCallOpen(false); 
+           setIsCallInitiator(false);
        } else if (data.status === 'answered') {
            setIsIncomingCall(false);
        }
@@ -153,7 +161,7 @@ const ChatSessionPage: React.FC = () => {
 
     const interval = setInterval(() => { updateFromStore(); }, 1000);
     return () => { unsubscribe(); unsubscribeCalls(); clearInterval(interval); }
-  }, [id, user?.role, isHumanCallOpen, isIncomingCall]);
+  }, [id, user?.role, isHumanCallOpen]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -354,7 +362,15 @@ const ChatSessionPage: React.FC = () => {
     if (session.counselorId === 'AI_AGENT_GEMINI') {
         setIsAICallOpen(true);
     } else {
+        // If call is incoming, we are ANSWERING, so isInitiator = false
+        if (isIncomingCall) {
+            setIsCallInitiator(false);
+        } else {
+            // If no incoming call, we are STARTING it, so isInitiator = true
+            setIsCallInitiator(true);
+        }
         setIsHumanCallOpen(true);
+        setIsIncomingCall(false); // Hide incoming indicator
     }
   };
 
@@ -400,7 +416,7 @@ const ChatSessionPage: React.FC = () => {
          isOpen={isHumanCallOpen} 
          onClose={() => setIsHumanCallOpen(false)} 
          sessionId={session.id} 
-         isInitiator={!isIncomingCall} 
+         isInitiator={isCallInitiator}
       />
 
       {/* Chat Header */}

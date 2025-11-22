@@ -7,6 +7,7 @@ import Home from './pages/Home';
 import ChatSessionPage from './pages/ChatSession';
 import CounselorDashboard from './pages/CounselorDashboard';
 import AdminDashboard from './pages/AdminDashboard';
+import DatabaseConfig from './components/DatabaseConfig';
 import { UserRole } from './types';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode, allowedRoles?: UserRole[] }> = ({ children, allowedRoles }) => {
@@ -80,6 +81,7 @@ const App: React.FC = () => {
   return (
     <AppProvider>
       <HashRouter>
+        <DatabaseConfig />
         <AppRoutes />
       </HashRouter>
     </AppProvider>
